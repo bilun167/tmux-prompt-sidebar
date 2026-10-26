@@ -1,0 +1,10 @@
+{
+  "name": "tmux-prompt-sidebar",
+  "version": "0.1.0",
+  "description": "Names tmux windows after your latest Claude Code prompt and marks each pane working, waiting for you, or finished, for the tmux-prompt-sidebar tmux plugin.",
+  "author": {"name": "bilun167"},
+  "homepage": "https://github.com/bilun167/tmux-prompt-sidebar",
+  "repository": "https://github.com/bilun167/tmux-prompt-sidebar",
+  "license": "MIT",
+  "keywords": ["tmux", "sidebar", "hooks"]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "tmux-prompt-sidebar",
+  "description": "A tmux sidebar that lists your windows by your latest Claude Code prompt, with a mark for working, waiting and finished.",
+  "owner": {
+    "name": "bilun167"
+  },
+  "plugins": [
+    {
+      "name": "tmux-prompt-sidebar",
+      "source": "./",
+      "description": "tmux window names and pane marks from Claude Code hooks, for the tmux-prompt-sidebar tmux plugin."
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/tmux-claude-hook\" prompt || true", "timeout": 5}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/tmux-claude-hook\" stop || true", "timeout": 5}]}],
+    "Notification": [{"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/tmux-claude-hook\" notify || true", "timeout": 5}]}]
+  }
+}

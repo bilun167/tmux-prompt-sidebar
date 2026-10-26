@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""A sidebar on the right of each tmux window: sessions and their windows as a
+tree, like Zed's project panel, in place of the bottom status bar.
+
+  tmux-sidebar toggle   prefix+e by default: turn the sidebar on or off everywhere
+  tmux-sidebar ensure   tmux hooks: give the current window a sidebar if it
+                        should have one (on, and the client is wide enough)
+  tmux-sidebar fit W    window-resized hook: set window W's sidebar to the
+                        width for W's new size
+  tmux-sidebar run      the sidebar itself (one per window)
+
+Each pane shows your latest prompt to Claude in it (tmux-claude-hook) and,
+dimmed, Claude's own title for the conversation; once Claude exits back to the
+shell, the pane's folder instead. A window split into panes
+has a row per pane under its number. Marks:
+  ⋯ working   ? waiting for you   ● finished since you last looked
+Click a row, or j/k and Enter, to go to that window and pane. The sidebar is
+@sidebar_width_pct of the client's width (default 20), kept between
+@sidebar_min and @sidebar_max columns (22 and 40), and draws to whatever width
+its pane has, so a drag of its border stays until the terminal is resized. On a
+client narrower than @sidebar_min_width (default 120 columns, e.g. the phone)
+the sidebar goes away and the bottom status bar comes back.
+"""
+import fcntl
+import os
+import re
+import select
+import signal
+import subprocess
+import sys
+import termios
+import textwrap
+import tty
+import unicodedata
+
+SEP = "|~|"  # tmux escapes control characters in -F output
+SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh"}
+FIELDS = [
+    "session_name", "window_index", "window_id", "window_name", "window_active",
+    "session_attached", "pane_id", "pane_active", "pane_title",
+    "pane_current_command", "pane_current_path", "@claude_prompt", "@claude_state", "@claude_unread", "@sidebar",
+]
+
+
+def tmux(*args):
+    return subprocess.run(["tmux", *args], capture_output=True, text=True).stdout.rstrip("\n")
+
+
+def opt(name, default=""):
+    return tmux("show", "-gqv", name) or default
+
+
+# --- toggle / ensure -------------------------------------------------------
+
+def sidebar_panes(*scope):  # "-a" everywhere, or "-t", window
+    out = tmux("list-panes", *scope, "-F", "#{pane_id} #{@sidebar}")
+    return [p.split()[0] for p in out.splitlines() if p.endswith(" 1")]
+
+
+def client_width():
+    return int(tmux("display", "-p", "#{client_width}") or 0)
+
+
+def wanted(cols):
+    """Whether a client this wide gets sidebars."""
+    return opt("@sidebar_on", "1") == "1" and cols >= int(opt("@sidebar_min_width", "120"))
+
+
+def sidebar_width(cols):
+    pct = int(opt("@sidebar_width_pct", "20"))
+    return max(int(opt("@sidebar_min", "22")), min(int(opt("@sidebar_max", "40")), cols * pct // 100))
+
+
+def ensure():
+    # Opening a window fires two hooks at once; without the lock both add a sidebar
+    lock = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "tmux-sidebar-%d.lock" % os.getuid())
+    with open(lock, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        _ensure()
+
+
+def _ensure():
+    cols = client_width()
+    on = wanted(cols)
+    tmux("set", "status", "off" if on else "on")
+    window = tmux("display", "-p", "#{window_id}")
+    mine = sidebar_panes("-t", window)
+    if on and not mine:
+        pane = tmux("split-window", "-hfd", "-l", str(sidebar_width(cols)), "-t", window, "-P", "-F", "#{pane_id}",
+                    "exec " + os.path.abspath(__file__) + " run")
+        tmux("set", "-p", "-t", pane, "@sidebar", "1")
+    elif on:
+        for pane in mine[1:]:  # e.g. one restored by resurrect and one added since
+            tmux("kill-pane", "-t", pane)
+    else:
+        for pane in mine:
+            tmux("kill-pane", "-t", pane)
+
+
+def fit_window(window):
+    # tmux resizes a window you aren't looking at only when you go to it, and then
+    # gives the sidebar a share of the change, so set its width again each time.
+    # Not otherwise, so your own drag of its border stays.
+    cols = int(tmux("display", "-p", "-t", window, "#{window_width}") or 0)
+    if wanted(cols):
+        for pane in sidebar_panes("-t", window):
+            tmux("resize-pane", "-t", pane, "-x", str(sidebar_width(cols)))
+
+
+def toggle():
+    on = opt("@sidebar_on", "1") != "1"
+    tmux("set", "-g", "@sidebar_on", "1" if on else "0")
+    if not on:
+        for pane in sidebar_panes("-a"):
+            tmux("kill-pane", "-t", pane)
+    ensure()
+
+
+# --- the sidebar -----------------------------------------------------------
+
+def width(s):
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 0 if unicodedata.combining(c) else 1 for c in s)
+
+
+def fit(s, n):
+    if width(s) <= n:
+        return s + " " * (n - width(s))
+    while width(s) > n - 1:
+        s = s[:-1]
+    return s + "…" + " " * (n - 1 - width(s))
+
+
+def topic(title, host):
+    # Claude prefixes its title with ✳ (idle) or a spinner while working
+    t = re.sub(r"^[^\w(\[]+", "", title).strip()
+    short = host.split(".")[0]
+    return "" if t in ("", host, short) or t.startswith(short + ".") else t
+
+
+class Sidebar:
+    def __init__(self):
+        self.me = os.environ["TMUX_PANE"]
+        tmux("set", "-p", "-t", self.me, "@sidebar", "1")  # also after a resurrect restore
+        tmux("select-pane", "-t", self.me, "-T", "windows")  # for pane-border-status
+        self.host = os.uname().nodename
+        self.rows = []      # (text, style, pane id or None, first row of a pane?)
+        self.cursor = None  # keyboard selection, a row index
+        self.last = None
+
+    def load(self):
+        """Windows in order, each a list of its panes (not counting the sidebars)."""
+        out = tmux("list-panes", "-a", "-F", SEP.join("#{%s}" % f for f in FIELDS))
+        windows, mywindow = {}, None
+        for line in out.splitlines():
+            p = dict(zip(FIELDS, line.split(SEP)))
+            if p["pane_id"] == self.me:
+                mywindow = p["window_id"]
+            if p["@sidebar"] != "1":
+                windows.setdefault(p["window_id"], []).append(p)
+        return mywindow, list(windows.values())
+
+    def label(self, p, alone):
+        """A pane's name, Claude's title for it, and its mark."""
+        if p["pane_current_command"].lstrip("-") in SHELLS:
+            # Claude has exited: its prompt and title are stale, so show the folder
+            path = p["pane_current_path"]
+            home = os.path.expanduser("~")
+            return ("~" if path == home else os.path.basename(path) or path), "", " "
+        # Latest prompt, Claude's title under it; before the first prompt the title alone
+        about = topic(p["pane_title"], self.host)
+        fallback = re.sub(r"^\S+@\S+: ", "", p["window_name"]) if alone else p["pane_current_command"]
+        name = p["@claude_prompt"] or about or fallback  # the Macs' zsh names windows "user@host: cmd"
+        state = p["@claude_state"]
+        if "\u2800" <= p["pane_title"][:1] <= "\u28ff" and state != "waiting":
+            state = "working"  # Claude's spinner, also for sessions started before the hook
+        mark = {"working": "⋯", "waiting": "?"}.get(state, " ")
+        if p["@claude_unread"] == "1" and mark == " ":
+            mark = "●"
+        return name, "" if about == name else about, mark
+
+    def build(self, mywindow, windows, w):
+        rows = []
+        session = None
+        for panes in windows:
+            first = panes[0]
+            if first["session_name"] != session:
+                session = first["session_name"]
+                rows.append((fit("▾ " + session, w), "bold", None, False))
+            mine = first["window_id"] == mywindow
+            split = len(panes) > 1
+            for i, p in enumerate(panes):
+                name, about, mark = self.label(p, not split)
+                if mark == " ":
+                    mark = "·"  # so each pane's first row stands out from the lines under it
+                if mine:
+                    style = "current" if p["pane_active"] == "1" or not split else "bold"
+                else:
+                    style = {"?": "waiting", "●": "unread"}.get(mark, "")
+                # "  6 ● pane 1", then "  ⋮ ● pane 2" lined up under it; ⋮ runs down the window
+                dots = "⋮".ljust(len(first["window_index"]))
+                number = first["window_index"] if i == 0 else dots
+                head, indent = "  %s %s " % (number, mark), "  %s   " % dots
+                lines = textwrap.wrap(name, w - len(indent), max_lines=2, placeholder="…") or [""]
+                rows.append((fit(head + lines[0], w), style, p["pane_id"], True))
+                for more in lines[1:]:
+                    rows.append((fit(indent + more, w), style, p["pane_id"], False))
+                if about:
+                    rows.append((fit(indent + about, w), style if mine else "dim", p["pane_id"], False))
+        return rows
+
+    def draw(self):
+        mywindow, windows = self.load()
+        if not any(panes[0]["window_id"] == mywindow for panes in windows):
+            sys.exit(0)  # everything else in this window has gone: let it close
+        cols, height = os.get_terminal_size()
+        self.rows = self.build(mywindow, windows, max(cols - 1, 12))  # the last column would wrap
+        frame = (self.rows, self.cursor)
+        if frame == self.last:
+            return
+        self.last = frame
+        styles = {"bold": "\033[1m", "current": "\033[7;1m", "dim": "\033[2m",
+                  "waiting": "\033[33;1m", "unread": "\033[32m", "": ""}
+        out = []
+        for i, (text, style, _, _) in enumerate(self.rows[: height - 1]):
+            sel = "\033[4m" if i == self.cursor else ""
+            out.append(styles[style] + sel + text + "\033[0m")
+        out.append("\033[J")
+        sys.stdout.write("\033[H" + "\r\n".join(out))
+        sys.stdout.flush()
+
+    def unfocus(self):
+        if tmux("display", "-p", "-t", self.me, "#{pane_active}") == "1":
+            tmux("last-pane")
+
+    def go(self, row):
+        if row is None or not 0 <= row < len(self.rows) or not self.rows[row][2]:
+            return
+        pane = self.rows[row][2]
+        self.unfocus()  # leave this window's focus where it was, not on the sidebar
+        tmux("switch-client", "-t", pane)
+        tmux("select-window", "-t", pane)
+        tmux("select-pane", "-t", pane)
+        self.cursor = None
+
+    def key(self, data):
+        for m in re.finditer(rb"\033\[<(\d+);(\d+);(\d+)([Mm])", data):
+            button, y, kind = int(m[1]), int(m[3]), m[4]
+            if button == 0 and kind == b"M":
+                self.go(y - 1)
+            return
+        targets = [i for i, r in enumerate(self.rows) if r[3]]
+        if not targets:
+            return
+        pos = targets.index(self.cursor) if self.cursor in targets else -1
+        if data in (b"j", b"\033[B"):
+            self.cursor = targets[min(pos + 1, len(targets) - 1)]
+        elif data in (b"k", b"\033[A"):
+            self.cursor = targets[max(pos - 1, 0)]
+        elif data in (b"\r", b"\n"):
+            self.go(self.cursor)
+        elif data in (b"q", b"\033"):
+            self.cursor = None
+            self.unfocus()
+
+    def run(self):
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        signal.signal(signal.SIGWINCH, lambda *_: setattr(self, "last", None))
+        tty.setcbreak(fd)
+        sys.stdout.write("\033[?25l\033[?1000h\033[?1006h\033[2J")
+        try:
+            while True:
+                self.draw()
+                try:
+                    ready, _, _ = select.select([fd], [], [], 1)
+                except InterruptedError:
+                    continue
+                if ready:
+                    self.key(os.read(fd, 1024))
+        finally:
+            sys.stdout.write("\033[?1000l\033[?1006l\033[?25h")
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
+if __name__ == "__main__":
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "run":
+        try:
+            Sidebar().run()
+        except KeyboardInterrupt:
+            pass
+    elif cmd == "fit" and len(sys.argv) > 2:
+        fit_window(sys.argv[2])
+    elif cmd in ("toggle", "ensure"):
+        {"toggle": toggle, "ensure": ensure}[cmd]()
+    else:
+        sys.exit(__doc__)
