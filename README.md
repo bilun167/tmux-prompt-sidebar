@@ -1,38 +1,40 @@
 # tmux-prompt-sidebar
 
-A tree of your tmux sessions and windows on the right of every window, like
-an editor's project panel, in place of the status bar. Each pane running
-[Claude Code](https://claude.com/claude-code) is listed by your latest prompt
-in it, with a mark for whether Claude is working, waiting for you, or finished
-since you last looked.
+**Run several Claude Code sessions in tmux without losing track of them.**
+A sidebar lists every session, window and pane by what you last asked Claude
+there, and marks the ones that need you.
 
-```
-▾ main
-  1 ● fix the caps lock remap so
-  ⋮   it survives a reboot and…
-  ⋮   Caps Lock remapping to lef…
-  2 ? /kanban-reconcile
-  3 ⋯ add the tmux sidebar
-  ⋮   TMUX right-side tab tree
-  ⋮ ● add a row per pane
-  ⋮   Sidebar tab name changes
-▾ notes
-  1 · ~
-```
+![The sidebar: clicking rows to switch windows and sessions, a new prompt renaming its row, and a finished session marked until you look at it](docs/demo/sidebar.gif)
 
-Two parts, both in this repo:
+With three or four Claude Code sessions open, tmux's status bar says
+`claude claude claude`. Which one was the auth refactor? Which one stopped
+twenty minutes ago to ask for a permission? Which finished while you were in
+another window? You find out by cycling through them all.
 
-- **The tmux plugin** (`sidebar.tmux`, `bin/tmux-sidebar`): the sidebar.
-- **The Claude Code plugin** (`.claude-plugin/`, `hooks/`, `bin/tmux-claude-hook`):
-  hooks that tell tmux what each Claude pane is doing. Without them the
-  sidebar still works, showing Claude's own conversation titles and window
-  names.
+The sidebar answers all three at a glance:
 
-Needs tmux 3.2+ and Python 3.9+ (`python3` on your `PATH`). Linux and macOS.
+- **Named by what you asked.** Each pane is listed by your latest prompt in it,
+  with Claude's own title for the conversation underneath. Send a new prompt
+  and the row (and the window's name) follows.
+- **`?` Claude is waiting for you**: a question or a permission prompt, in
+  yellow, so a stalled session doesn't sit unnoticed.
+- **`●` finished since you last looked**, in green, until you go to that pane.
+- **`⋯` still working.**
+- **One click to get there**, across windows and sessions. Or `j`/`k` and Enter.
+- **Split windows too:** each pane gets its own row and mark.
+- **Out of the way when it should be.** `prefix + e` hides it everywhere; on a
+  narrow client, like a phone over SSH, it steps aside for the normal status
+  bar (whose window names are your prompts too).
+
+It's two small Python scripts (standard library only) and three Claude Code
+hooks. Nothing runs in the background besides one sidebar pane per window.
 
 ## Install
 
-**tmux**, with [TPM](https://github.com/tmux-plugins/tpm), in `~/.tmux.conf`:
+Needs tmux 3.2+ and Python 3.9+ (`python3` on your `PATH`). Linux and macOS.
+
+**1. The sidebar**, with [TPM](https://github.com/tmux-plugins/tpm), in
+`~/.tmux.conf`:
 
 ```tmux
 set -g @plugin 'bilun167/tmux-prompt-sidebar'
@@ -42,7 +44,8 @@ then `prefix + I`. Without TPM, clone the repo and run `./install.sh`, which
 adds `run-shell '/path/to/tmux-prompt-sidebar/sidebar.tmux'` to `~/.tmux.conf`
 and reloads tmux.
 
-**Claude Code**, inside Claude:
+**2. The Claude Code hooks**, which tell the sidebar what each Claude pane is
+doing. Inside Claude Code:
 
 ```
 /plugin marketplace add bilun167/tmux-prompt-sidebar
@@ -51,31 +54,9 @@ and reloads tmux.
 
 Or, without plugins, `./install.sh --hooks` adds the same three hooks to
 `~/.claude/settings.json` (needs `jq`; it backs the file up first). Use one or
-the other, not both. Claude sessions already running pick up the hooks after a
-restart.
-
-## Using it
-
-- Line one of a pane is your latest prompt to Claude in it, wrapped onto two
-  lines. The dimmed line under it is Claude's own title for the conversation.
-- A window split into panes lists them one under another next to its number,
-  each with its own mark. `⋮` runs down all of a window's rows.
-- Marks: `⋯` Claude is working, `?` it's waiting for you (a question or a
-  permission prompt), `●` it finished since you last looked at that pane.
-  `·` means nothing is going on. Landing on the pane clears `●`.
-- Once Claude exits and the pane is back at a shell, it shows the pane's
-  folder instead.
-- Click a row to go to that window and pane, or focus the sidebar and use
-  `j`/`k` and Enter (`q` or Esc to leave).
-- `prefix + e` turns the sidebar on or off everywhere.
-- Clients narrower than 120 columns (a phone, say) don't get the sidebar and
-  keep the status bar, whose window names are your prompts too.
-- The sidebar is 20% of the terminal's width, between 22 and 40 columns, and
-  follows the terminal when it's resized. Drag its border to change it; that
-  stays until the terminal is resized again.
-
-The hook renames a window after the latest prompt in any of its panes, which
-turns off tmux's automatic renaming for that window.
+the other, not both. Sessions already running pick up the hooks after a
+restart. Without the hooks the sidebar still works, listing panes by Claude's
+own titles.
 
 ## Options
 
@@ -89,30 +70,32 @@ Set these in `~/.tmux.conf` before the plugin loads:
 | `@sidebar_min`, `@sidebar_max` | `22`, `40` | limits on that width, in columns |
 | `@sidebar_on` | `1` | `0` starts with the sidebar off |
 
-## With tmux-resurrect
+The sidebar follows the terminal when it's resized. Drag its border to change
+its width; that stays until the terminal is resized again.
 
-Sidebars restored by tmux-resurrect come back as plain panes. To restore
-them as sidebars, add the sidebar to resurrect's processes:
+## Details
 
-```tmux
-set -g @resurrect-processes '"~tmux-sidebar run"'
-```
-
-If a window ends up with two, the next `ensure` (switching windows, say)
-removes the extra one.
+- A pane where Claude has exited back to the shell shows its folder instead
+  of the old prompt.
+- The hook renames a window after the latest prompt in any of its panes,
+  which turns off tmux's automatic renaming for that window.
+- **With tmux-resurrect**, restored sidebars come back as plain panes unless
+  you add the sidebar to resurrect's processes:
+  `set -g @resurrect-processes '"~tmux-sidebar run"'` (alongside any you
+  already list).
 
 ## How it works
 
-`tmux-claude-hook` runs on Claude Code's `UserPromptSubmit`, `Stop` and
+`bin/tmux-claude-hook` runs on Claude Code's `UserPromptSubmit`, `Stop` and
 `Notification` hooks. It stores the prompt and a state (`working`, `waiting`,
-`done`) as pane options (`@claude_prompt`, `@claude_state`,
-`@claude_unread`), and renames the window. It does nothing outside tmux.
+`done`) as pane options (`@claude_prompt`, `@claude_state`, `@claude_unread`)
+and renames the window. Outside tmux it does nothing.
 
-`tmux-sidebar run` is the sidebar: one small pane per window, redrawn once a
-second from `tmux list-panes -a`. tmux hooks (`after-new-window`,
-`client-resized` and others, at index 90) call `tmux-sidebar ensure`, which
-adds or removes the current window's sidebar and turns the status bar off or
-on.
+`bin/tmux-sidebar run` is the sidebar: one narrow pane per window, redrawn
+from `tmux list-panes -a` once a second or on a click or key. tmux hooks
+(`after-new-window`, `client-session-changed`, `client-resized` and others,
+at index 90) call `tmux-sidebar ensure`, which adds or removes the current
+window's sidebar and turns the status bar off or on.
 
 ## Uninstall
 
@@ -120,6 +103,13 @@ Remove the `@plugin` line (or the `run-shell` line) from `~/.tmux.conf`, then
 `prefix + e` to close the open sidebars and `tmux set -g status on`. Remove the
 Claude Code plugin with `/plugin uninstall tmux-prompt-sidebar`, or the three
 `tmux-claude-hook` entries from `~/.claude/settings.json`.
+
+## Development
+
+`python3 -m unittest discover -s tests` runs the tests. `docs/demo/make.sh`
+rebuilds the GIF above: a made-up session on a throwaway tmux server, clicked
+and typed into by the script, recorded, and rendered with xterm.js, headless
+Chromium and ffmpeg.
 
 ## Licence
 

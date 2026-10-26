@@ -1,0 +1,20 @@
+> add rate limiting to the /login endpoint
+
+⏺ Read(src/routes/login.ts)
+  ⎿  Read 61 lines
+
+⏺ Edit(src/routes/login.ts)
+  ⎿  Added a limiter: 5 attempts a minute per IP
+
+⏺ Bash(npm test -- tests/routes/login)
+  ⎿  14 passed
+
+⏺ Done: /login allows 5 attempts a minute per IP.
+=== reply Retry-After on 429
+⏺ Read(src/middleware/limiter.ts)
+  ⎿  Read 38 lines
+⏺ Edit(src/middleware/limiter.ts)
+  ⎿  Sets Retry-After on 429 responses
+⏺ Bash(npm test -- tests/routes/login)
+  ⎿  15 passed
+⏺ Done: a blocked request gets 429 and Retry-After.

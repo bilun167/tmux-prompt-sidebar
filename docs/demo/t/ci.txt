@@ -1,0 +1,13 @@
+> why do macOS CI runs miss the cache
+
+⏺ The cache key hashes package-lock.json from
+  the repo root, but the lockfile is in web/.
+
+⏺ Edit(.github/workflows/ci.yml)
+- key: deps-${{ hashFiles('package-lock.json') }}
++ key: deps-${{ hashFiles('web/package-lock.json') }}
+
+ Do you want to make this edit to ci.yml?
+ ❯ 1. Yes
+   2. Yes, and don't ask again this session
+   3. No, and tell Claude what to do differently

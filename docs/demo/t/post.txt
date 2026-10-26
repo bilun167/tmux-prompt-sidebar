@@ -1,0 +1,6 @@
+> draft a post about the v2 release
+
+⏺ Write(posts/2026-v2-release.md)
+  ⎿  Wrote 64 lines
+
+⏺ Drafted: what's new, upgrading, and thanks.
