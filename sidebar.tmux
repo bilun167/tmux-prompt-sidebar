@@ -14,6 +14,7 @@ tmux bind "${key:-e}" run-shell -b "$bin toggle"
 # Landing on a pane clears its "finished since you last looked" mark
 tmux set-hook -g 'session-window-changed[90]' "set -p @claude_unread 0 ; run-shell -b \"$bin ensure\""
 tmux set-hook -g 'window-pane-changed[90]' 'set -p @claude_unread 0'
+tmux set-hook -g 'client-session-changed[90]' "set -p @claude_unread 0 ; run-shell -b \"$bin ensure\""
 tmux set-hook -g 'after-new-window[90]' "run-shell -b \"$bin ensure\""
 tmux set-hook -g 'client-attached[90]' "run-shell -b \"$bin ensure\""
 tmux set-hook -g 'client-resized[90]' "run-shell -b \"$bin ensure\""
