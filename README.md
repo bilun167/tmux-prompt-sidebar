@@ -4,7 +4,7 @@
 A sidebar lists every session, window and pane by what you last asked Claude
 there, and marks the ones that need you.
 
-![The sidebar: clicking rows to switch windows and sessions, a new prompt renaming its row, and a finished session marked until you look at it](docs/demo/sidebar.gif)
+![The sidebar: clicking rows to switch windows and sessions, a new prompt renaming its row, and a finished session marked until you look at it](docs/sidebar.gif)
 
 With three or four Claude Code sessions open, tmux's status bar says
 `claude claude claude`. Which one was the auth refactor? Which one stopped
@@ -106,10 +106,7 @@ Claude Code plugin with `/plugin uninstall tmux-prompt-sidebar`, or the three
 
 ## Development
 
-`python3 -m unittest discover -s tests` runs the tests. `docs/demo/make.sh`
-rebuilds the GIF above: a made-up session on a throwaway tmux server, clicked
-and typed into by the script, recorded, and rendered with xterm.js, headless
-Chromium and ffmpeg.
+`python3 -m unittest discover -s tests` runs the tests.
 
 ## Licence
 

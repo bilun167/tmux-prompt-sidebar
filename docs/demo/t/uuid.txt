@@ -1,6 +1,0 @@
-> migrate the users table to uuid primary keys
-
-⏺ Write(migrations/0042_users_uuid.sql)
-  ⎿  Wrote 27 lines
-
-✶ Backfilling ids… (esc to interrupt)
