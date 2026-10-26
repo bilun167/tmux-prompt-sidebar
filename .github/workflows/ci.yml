@@ -1,16 +1,20 @@
 name: ci
 on: [push, pull_request]
 jobs:
-  test:
+  linux:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.13"
       - run: python -m unittest discover -s tests -v
       - run: bash -n sidebar.tmux && bash -n install.sh
       - run: python -m json.tool hooks/hooks.json > /dev/null
+  macos:
+    # macOS's own python3 (3.9) and bash 3.2, which is what Macs run it with
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: /usr/bin/python3 --version && /usr/bin/python3 -m unittest discover -s tests -v
+      - run: /bin/bash -n sidebar.tmux && /bin/bash -n install.sh
