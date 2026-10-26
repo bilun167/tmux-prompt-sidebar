@@ -9,8 +9,8 @@ set -euo pipefail
 dir="$(cd "$(dirname "$0")" && pwd)"
 stamp=$(date +%Y%m%d-%H%M%S)
 
-backup() {
-  if [ -e "$1" ]; then
+backup() {  # keeps the first backup of a run (or of another installer this second)
+  if [ -e "$1" ] && [ ! -e "$1.bak.$stamp" ]; then
     cp -p "$1" "$1.bak.$stamp" && echo "backed up $1 to $1.bak.$stamp"
   fi
 }
@@ -37,7 +37,7 @@ if [ "${1:-}" = --hooks ]; then
   fi
 fi
 
-if tmux info >/dev/null 2>&1; then
+if tmux has-session 2>/dev/null; then  # a server is running (info needs a client)
   tmux source-file ~/.tmux.conf
   echo "reloaded tmux"
 fi
