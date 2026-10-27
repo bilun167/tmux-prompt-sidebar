@@ -68,6 +68,36 @@ class Label(unittest.TestCase):
         self.assertEqual(bar().label(p, True)[0], "vim")
 
 
+class Age(unittest.TestCase):
+    def test_format(self):
+        self.assertEqual([sidebar.age(n) for n in (0, 59, 60, 3599, 3600, 86399, 86400 * 3)],
+                         ["0s", "59s", "1m", "59m", "1h", "23h", "3d"])
+
+    def test_on_the_first_row_right_aligned(self):
+        p = pane(**{"@claude_prompt": "fix the flaky login test in CI", "@claude_state": "waiting",
+                    "@claude_since": "1000"})
+        rows = bar().build("@9", [[p]], 30, now=1000 + 720)
+        self.assertEqual([r[0] for r in rows], ["▾ main".ljust(30), "  1 ? fix the flaky login  12m",
+                                                "  ⋮   test in CI".ljust(30)])
+
+    def test_dropped_when_narrow_unknown_or_off(self):
+        p = pane(**{"@claude_prompt": "fix it", "@claude_state": "done", "@claude_since": "1000"})
+        self.assertNotIn("1h", bar().build("@9", [[p]], 18, now=5000)[1][0])
+        self.assertIn("1h", bar().build("@9", [[p]], 22, now=5000)[1][0])
+        p["@claude_since"] = ""
+        self.assertEqual(bar().build("@9", [[p]], 22, now=5000)[1][0].rstrip(), "  1 · fix it")
+        p["@claude_since"] = "1000"
+        b = bar()
+        b.ages = False
+        self.assertEqual(b.build("@9", [[p]], 22, now=5000)[1][0].rstrip(), "  1 · fix it")
+
+    def test_not_for_a_shell_or_a_spinner_the_hook_did_not_report(self):
+        shell = pane(pane_current_command="zsh", **{"@claude_state": "done", "@claude_since": "1000"})
+        spin = pane(pane_title="⠂ Thinking", **{"@claude_state": "done", "@claude_since": "1000"})
+        self.assertEqual(bar().since(shell, 5000), "")
+        self.assertEqual(bar().since(spin, 5000), "")
+
+
 class Build(unittest.TestCase):
     def test_split_window_rows(self):
         a = pane(pane_id="%1", pane_active="1", **{"@claude_prompt": "first"})

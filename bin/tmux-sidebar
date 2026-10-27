@@ -30,6 +30,7 @@ import subprocess
 import sys
 import termios
 import textwrap
+import time
 import tty
 import unicodedata
 
@@ -38,7 +39,7 @@ SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh"}
 FIELDS = [
     "session_name", "window_index", "window_id", "window_name", "window_active",
     "session_attached", "pane_id", "pane_active", "pane_title",
-    "pane_current_command", "pane_current_path", "@claude_prompt", "@claude_state", "@claude_unread", "@sidebar",
+    "pane_current_command", "pane_current_path", "@claude_prompt", "@claude_state", "@claude_unread", "@claude_since", "@sidebar",
 ]
 
 
@@ -137,7 +138,16 @@ def topic(title, host):
     return "" if t in ("", host, short) or t.startswith(short + ".") else t
 
 
+def age(seconds):
+    for unit, n in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= n:
+            return "%d%s" % (seconds // n, unit)
+    return "%ds" % max(seconds, 0)
+
+
 class Sidebar:
+    ages = True  # @sidebar_show_age, read on each draw
+
     def __init__(self):
         self.me = os.environ["TMUX_PANE"]
         tmux("set", "-p", "-t", self.me, "@sidebar", "1")  # also after a resurrect restore
@@ -178,7 +188,16 @@ class Sidebar:
             mark = "●"
         return name, "" if about == name else about, mark
 
-    def build(self, mywindow, windows, w):
+    def since(self, p, now):
+        """How long the pane has been in its hook-reported state, or "" if unknown."""
+        if not self.ages or not p["@claude_since"].isdigit() or p["pane_current_command"].lstrip("-") in SHELLS:
+            return ""
+        if "\u2800" <= p["pane_title"][:1] <= "\u28ff" and p["@claude_state"] != "working":
+            return ""  # the spinner says working, the hook said otherwise: the time isn't for this state
+        return age(int(now) - int(p["@claude_since"]))
+
+    def build(self, mywindow, windows, w, now=None):
+        now = time.time() if now is None else now
         rows = []
         session = None
         for panes in windows:
@@ -200,8 +219,13 @@ class Sidebar:
                 dots = "⋮".ljust(len(first["window_index"]))
                 number = first["window_index"] if i == 0 else dots
                 head, indent = "  %s %s " % (number, mark), "  %s   " % dots
-                lines = textwrap.wrap(name, w - len(indent), max_lines=2, placeholder="…") or [""]
-                rows.append((fit(head + lines[0], w), style, p["pane_id"], True))
+                when = " " + self.since(p, now)
+                if when == " " or w - len(head) - len(when) < 10:  # the prompt keeps its room
+                    when = ""
+                # the first line leaves room for the time at its end
+                lines = textwrap.wrap(name, w - len(indent), max_lines=2, placeholder="…",
+                                      initial_indent=" " * len(when)) or [""]
+                rows.append((fit(head + lines[0][len(when):], w - len(when)) + when, style, p["pane_id"], True))
                 for more in lines[1:]:
                     rows.append((fit(indent + more, w), style, p["pane_id"], False))
                 if about:
@@ -213,6 +237,7 @@ class Sidebar:
         if not any(panes[0]["window_id"] == mywindow for panes in windows):
             sys.exit(0)  # everything else in this window has gone: let it close
         cols, height = os.get_terminal_size()
+        self.ages = opt("@sidebar_show_age", "1") == "1"
         self.rows = self.build(mywindow, windows, max(cols - 1, 12))  # the last column would wrap
         frame = (self.rows, self.cursor)
         if frame == self.last:

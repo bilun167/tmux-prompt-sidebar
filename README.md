@@ -20,6 +20,9 @@ The sidebar answers all three at a glance:
   yellow, so a stalled session doesn't sit unnoticed.
 - **`●` finished since you last looked**, in green, until you go to that pane.
 - **`⋯` still working.**
+- **How long:** each row ends with how long it has been waiting, working or
+  finished (`40s`, `12m`, `3h`), so the question that's been sitting for half
+  an hour stands out.
 - **One click to get there**, across windows and sessions. Or `j`/`k` and Enter.
 - **Split windows too:** each pane gets its own row and mark.
 - **Out of the way when it should be.** `prefix + e` hides it everywhere; on a
@@ -69,6 +72,7 @@ Set these in `~/.tmux.conf` before the plugin loads:
 | `@sidebar_width_pct` | `20` | sidebar width, % of the client's width |
 | `@sidebar_min`, `@sidebar_max` | `22`, `40` | limits on that width, in columns |
 | `@sidebar_on` | `1` | `0` starts with the sidebar off |
+| `@sidebar_show_age` | `1` | `0` hides how long each pane has been in its state |
 
 The sidebar follows the terminal when it's resized. Drag its border to change
 its width; that stays until the terminal is resized again.
@@ -87,9 +91,9 @@ its width; that stays until the terminal is resized again.
 ## How it works
 
 `bin/tmux-claude-hook` runs on Claude Code's `UserPromptSubmit`, `Stop` and
-`Notification` hooks. It stores the prompt and a state (`working`, `waiting`,
-`done`) as pane options (`@claude_prompt`, `@claude_state`, `@claude_unread`)
-and renames the window. Outside tmux it does nothing.
+`Notification` hooks. It stores the prompt, a state (`working`, `waiting`,
+`done`) and when that state began as pane options (`@claude_prompt`,
+`@claude_state`, `@claude_since`, `@claude_unread`) and renames the window. Outside tmux it does nothing.
 
 `bin/tmux-sidebar run` is the sidebar: one narrow pane per window, redrawn
 from `tmux list-panes -a` once a second or on a click or key. tmux hooks
