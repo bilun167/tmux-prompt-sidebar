@@ -3,6 +3,7 @@
 # without TPM: run-shell /path/to/tmux-prompt-sidebar/sidebar.tmux
 # Options (set them before this runs; defaults in bin/tmux-sidebar):
 #   @sidebar_key         key after the prefix that toggles the sidebar (e)
+#   @sidebar_next_key    key after the prefix for the next pane that needs you (N)
 #   @sidebar_min_width   narrower clients keep the status bar instead (120)
 #   @sidebar_width_pct   sidebar width as % of the client (20)
 #   @sidebar_min/_max    clamp for that width, in columns (22, 40)
@@ -11,6 +12,8 @@ bin="'$dir/bin/tmux-sidebar'"
 
 key=$(tmux show -gqv @sidebar_key)
 tmux bind "${key:-e}" run-shell -b "$bin toggle"
+next=$(tmux show -gqv @sidebar_next_key)
+tmux bind "${next:-N}" run-shell -b "$bin next '#{client_name}'"
 # Landing on a pane clears its "finished since you last looked" mark
 tmux set-hook -g 'session-window-changed[90]' "set -p @claude_unread 0 ; run-shell -b \"$bin ensure\""
 tmux set-hook -g 'window-pane-changed[90]' 'set -p @claude_unread 0'

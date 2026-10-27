@@ -8,13 +8,16 @@ tree, like Zed's project panel, in place of the bottom status bar.
   tmux-sidebar fit W    window-resized hook: set window W's sidebar to the
                         width for W's new size
   tmux-sidebar run      the sidebar itself (one per window)
+  tmux-sidebar next [C] prefix+N by default: go to the pane that needs you,
+                        oldest waiting first, then finished and unread; again
+                        for the one after it. C: the client to switch
 
 Each pane shows your latest prompt to Claude in it (tmux-claude-hook) and,
 dimmed, Claude's own title for the conversation; once Claude exits back to the
 shell, the pane's folder instead. A window split into panes
 has a row per pane under its number. Marks:
   ⋯ working   ? waiting for you   ● finished since you last looked
-Click a row, or j/k and Enter, to go to that window and pane. The sidebar is
+Click a row, or j/k and Enter, to go to that window and pane; n for "next". The sidebar is
 @sidebar_width_pct of the client's width (default 20), kept between
 @sidebar_min and @sidebar_max columns (22 and 40), and draws to whatever width
 its pane has, so a drag of its border stays until the terminal is resized. On a
@@ -117,6 +120,58 @@ def toggle():
     ensure()
 
 
+# --- next ------------------------------------------------------------------
+
+def state(p):
+    """The pane's state: working, waiting, done, or "" (a shell, or unknown)."""
+    if p["pane_current_command"].lstrip("-") in SHELLS:
+        return ""  # Claude has exited: what it set is stale
+    s = p["@claude_state"]
+    if "\u2800" <= p["pane_title"][:1] <= "\u28ff" and s != "waiting":
+        return "working"  # Claude's spinner, also for sessions started before the hook
+    return s
+
+
+def order(p, i):
+    """Sort key among panes that need you: waiting before done, then oldest first,
+    then sidebar order (i) for panes from before the hook stored times."""
+    since = int(p["@claude_since"]) if p["@claude_since"].isdigit() else float("inf")
+    return (0 if state(p) == "waiting" else 1, since, i)
+
+
+def pick(panes, current, last):
+    """The pane `next` goes to: the first that needs you, or, when you're on the
+    one `next` went to last time, the one after it (back to the first at the end).
+    Waiting, or finished and unread; None if nothing does."""
+    keys = {p["pane_id"]: order(p, i) for i, p in enumerate(panes)}
+    due = sorted((keys[p["pane_id"]], p["pane_id"]) for p in panes
+                 if p["pane_id"] != current and (state(p) == "waiting"
+                                                 or (state(p) == "done" and p["@claude_unread"] == "1")))
+    if not due:
+        return None
+    if current == last and current in keys:  # its ● is cleared by now, so place it by its key
+        later = [pane for key, pane in due if key > keys[current]]
+        if later:
+            return later[0]
+    return due[0][1]
+
+
+def jump(client=None, current=None):
+    out = tmux("list-panes", "-a", "-F", SEP.join("#{%s}" % f for f in FIELDS))
+    panes = [p for p in (dict(zip(FIELDS, line.split(SEP))) for line in out.splitlines()) if p["@sidebar"] != "1"]
+    at = ["-c", client] if client else []
+    current = current or tmux("display", "-p", *at, "#{pane_id}")
+    pane = pick(panes, current, opt("@sidebar_next_last"))
+    if not pane:
+        tmux("display-message", *at, "Nothing needs you")
+        return
+    tmux("set", "-g", "@sidebar_next_last", pane)
+    tmux("switch-client", *at, "-t", pane)
+    tmux("select-window", "-t", pane)
+    tmux("select-pane", "-t", pane)
+    tmux("set", "-p", "-t", pane, "@claude_unread", "0")
+
+
 # --- the sidebar -----------------------------------------------------------
 
 def width(s):
@@ -180,20 +235,16 @@ class Sidebar:
         about = topic(p["pane_title"], self.host)
         fallback = re.sub(r"^\S+@\S+: ", "", p["window_name"]) if alone else p["pane_current_command"]
         name = p["@claude_prompt"] or about or fallback  # the Macs' zsh names windows "user@host: cmd"
-        state = p["@claude_state"]
-        if "\u2800" <= p["pane_title"][:1] <= "\u28ff" and state != "waiting":
-            state = "working"  # Claude's spinner, also for sessions started before the hook
-        mark = {"working": "⋯", "waiting": "?"}.get(state, " ")
+        mark = {"working": "⋯", "waiting": "?"}.get(state(p), " ")
         if p["@claude_unread"] == "1" and mark == " ":
             mark = "●"
         return name, "" if about == name else about, mark
 
     def since(self, p, now):
         """How long the pane has been in its hook-reported state, or "" if unknown."""
-        if not self.ages or not p["@claude_since"].isdigit() or p["pane_current_command"].lstrip("-") in SHELLS:
+        # not for a shell, nor when the spinner says working and the hook said otherwise
+        if not self.ages or not p["@claude_since"].isdigit() or state(p) != p["@claude_state"]:
             return ""
-        if "\u2800" <= p["pane_title"][:1] <= "\u28ff" and p["@claude_state"] != "working":
-            return ""  # the spinner says working, the hook said otherwise: the time isn't for this state
         return age(int(now) - int(p["@claude_since"]))
 
     def build(self, mywindow, windows, w, now=None):
@@ -283,6 +334,11 @@ class Sidebar:
             self.cursor = targets[max(pos - 1, 0)]
         elif data in (b"\r", b"\n"):
             self.go(self.cursor)
+        elif data == b"n":
+            self.cursor = None
+            self.unfocus()
+            window = tmux("display", "-p", "-t", self.me, "#{window_id}")
+            jump(current=tmux("display", "-p", "-t", window, "#{pane_id}"))  # the window's active pane
         elif data in (b"q", b"\033"):
             self.cursor = None
             self.unfocus()
@@ -316,6 +372,8 @@ if __name__ == "__main__":
             pass
     elif cmd == "fit" and len(sys.argv) > 2:
         fit_window(sys.argv[2])
+    elif cmd == "next":
+        jump(sys.argv[2] if len(sys.argv) > 2 else None)
     elif cmd in ("toggle", "ensure"):
         {"toggle": toggle, "ensure": ensure}[cmd]()
     else:
