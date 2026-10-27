@@ -8,12 +8,14 @@
   notify  (Notification): state "waiting" (a question or permission prompt;
           the "waiting for your input" idle reminder is ignored)
 
+Each change of state also stores when it happened, in @claude_since.
 tmux-sidebar shows these. Does nothing outside tmux.
 """
 import json
 import os
 import subprocess
 import sys
+import time
 
 NAME_LEN = 28    # window name, also what the phone's status bar shows
 PROMPT_LEN = 120
@@ -35,6 +37,12 @@ def clip(text, n):
     return text if len(text) <= n else text[: n - 1].rstrip() + "…"
 
 
+def set_state(pane, state):
+    if tmux("display", "-p", "-t", pane, "#{@claude_state}") != state:
+        tmux("set", "-p", "-t", pane, "@claude_since", str(int(time.time())))
+    tmux("set", "-p", "-t", pane, "@claude_state", state)
+
+
 def main():
     pane = os.environ.get("TMUX_PANE")
     event = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -50,13 +58,13 @@ def main():
         if line and not line.startswith("<task-notification>"):  # a background task reporting back, not you
             tmux("rename-window", "-t", pane, clip(line, NAME_LEN))
             tmux("set", "-p", "-t", pane, "@claude_prompt", clip(line, PROMPT_LEN))
-        tmux("set", "-p", "-t", pane, "@claude_state", "working")
+        set_state(pane, "working")
         tmux("set", "-p", "-t", pane, "@claude_unread", "0")
     elif event == "notify" and (data.get("notification_type") == "idle_prompt"
                                 or "waiting for your input" in data.get("message", "")):
         return  # sent a minute after Claude finishes: it's done, not asking anything
     elif event in ("stop", "notify"):
-        tmux("set", "-p", "-t", pane, "@claude_state", "done" if event == "stop" else "waiting")
+        set_state(pane, "done" if event == "stop" else "waiting")
         # Being looked at: the active pane of the current window in an attached session
         looking = "#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}"
         if tmux("display", "-p", "-t", pane, looking) != "1":
