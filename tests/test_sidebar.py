@@ -98,6 +98,39 @@ class Age(unittest.TestCase):
         self.assertEqual(bar().since(spin, 5000), "")
 
 
+def due(pane_id, state, since="", unread="0"):
+    return pane(pane_id=pane_id, **{"@claude_state": state, "@claude_since": since, "@claude_unread": unread})
+
+
+class Next(unittest.TestCase):
+    panes = [due("%1", "done", "50", unread="1"), due("%2", "waiting", "300"), due("%3", "working", "10"),
+             due("%4", "waiting", "100"), due("%5", "done", "20", unread="0"), due("%6", "done", "40", unread="1")]
+
+    def test_oldest_waiting_first_then_unread_done(self):
+        self.assertEqual(sidebar.pick(self.panes, "%3", ""), "%4")
+
+    def test_again_goes_round_them_all(self):
+        seen, current, panes = [], "%3", [dict(p) for p in self.panes]
+        for _ in range(5):
+            current = sidebar.pick(panes, current, current if seen else "")
+            seen.append(current)
+            next(p for p in panes if p["pane_id"] == current)["@claude_unread"] = "0"  # as landing on it does
+        self.assertEqual(seen, ["%4", "%2", "%6", "%1", "%4"])
+
+    def test_elsewhere_starts_from_the_first(self):
+        self.assertEqual(sidebar.pick(self.panes, "%2", "%9"), "%4")
+        self.assertEqual(sidebar.pick(self.panes, "%4", "%9"), "%2")  # but not the one you're on
+
+    def test_without_times_in_sidebar_order(self):
+        panes = [due("%1", "done", unread="1"), due("%2", "waiting"), due("%3", "waiting", "500")]
+        self.assertEqual(sidebar.pick(panes, "%0", ""), "%3")
+        self.assertEqual(sidebar.pick(panes, "%3", "%3"), "%2")
+
+    def test_shells_and_nothing_due(self):
+        shell = pane(pane_id="%1", pane_current_command="zsh", **{"@claude_state": "waiting"})
+        self.assertIsNone(sidebar.pick([shell, due("%2", "working")], "%0", ""))
+
+
 class Build(unittest.TestCase):
     def test_split_window_rows(self):
         a = pane(pane_id="%1", pane_active="1", **{"@claude_prompt": "first"})

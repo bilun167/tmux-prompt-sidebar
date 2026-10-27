@@ -24,6 +24,9 @@ The sidebar answers all three at a glance:
   finished (`40s`, `12m`, `3h`), so the question that's been sitting for half
   an hour stands out.
 - **One click to get there**, across windows and sessions. Or `j`/`k` and Enter.
+- **Straight to whoever needs you:** `prefix + N` goes to the pane that has been
+  waiting longest, then to finished ones you haven't seen; press it again for
+  the next. `n` in the sidebar does the same.
 - **Split windows too:** each pane gets its own row and mark.
 - **Out of the way when it should be.** `prefix + e` hides it everywhere; on a
   narrow client, like a phone over SSH, it steps aside for the normal status
@@ -68,6 +71,7 @@ Set these in `~/.tmux.conf` before the plugin loads:
 | Option | Default | |
 |---|---|---|
 | `@sidebar_key` | `e` | key after the prefix that toggles the sidebar |
+| `@sidebar_next_key` | `N` | key after the prefix that goes to the next pane that needs you |
 | `@sidebar_min_width` | `120` | narrower clients keep the status bar |
 | `@sidebar_width_pct` | `20` | sidebar width, % of the client's width |
 | `@sidebar_min`, `@sidebar_max` | `22`, `40` | limits on that width, in columns |
