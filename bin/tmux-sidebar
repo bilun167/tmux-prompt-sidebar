@@ -17,9 +17,10 @@ dimmed, Claude's own title for the conversation; once Claude exits back to the
 shell, the pane's folder instead. A window split into panes
 has a row per pane under its number. Marks:
   ⋯ working   ? waiting for you   ● finished since you last looked
-Click a row, or j/k and Enter, to go to that window and pane; n for "next". The
-× at the end of a pane's row closes that pane, after a y/n unless it's a shell
-at its prompt. The sidebar is
+Click a row, or j/k and Enter, to go to that window and pane; n for "next". A
+× appears at the end of the row under the mouse (@sidebar_close_button: hover,
+always or off); a click on it closes that pane, after a y/n unless it's a shell
+at its prompt. On a touchscreen, a tap at the row's right end shows the ×. The sidebar is
 @sidebar_width_pct of the client's width (default 20), kept between
 @sidebar_min and @sidebar_max columns (22 and 40), and draws to whatever width
 its pane has, so a drag of its border stays until the terminal is resized. On a
@@ -41,7 +42,9 @@ import unicodedata
 
 SEP = "|~|"  # tmux escapes control characters in -F output
 SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh"}
-BUTTON = " ×"  # ends each pane's first row; a click on it closes the pane
+BUTTON = " ×"  # ends a pane's first row while hovered; a click on it closes the pane
+PRESS = 0.15   # seconds the × shows pressed before the question
+HOVER_IDLE = 10  # the mouse can't be seen leaving, so a still × hides after this
 FIELDS = [
     "session_name", "window_index", "window_id", "window_name", "window_active",
     "session_attached", "pane_id", "pane_index", "pane_active", "pane_title",
@@ -204,18 +207,23 @@ def age(seconds):
 
 
 class Sidebar:
-    ages = True  # @sidebar_show_age, read on each draw
+    ages = True     # @sidebar_show_age, read on each draw
+    mode = "hover"  # @sidebar_close_button: hover, always or off
 
     def __init__(self):
         self.me = os.environ["TMUX_PANE"]
         tmux("set", "-p", "-t", self.me, "@sidebar", "1")  # also after a resurrect restore
         tmux("select-pane", "-t", self.me, "-T", "windows")  # for pane-border-status
         self.host = os.uname().nodename
-        self.rows = []      # (text, style, pane id or None, first row of a pane?)
+        self.rows = []      # (text, style, pane id or None, first row of a pane?, its × or None)
         self.panes = {}     # pane id -> (pane, alone in its window?), for close
         self.w = 0          # the width rows are drawn at
         self.cursor = None  # keyboard selection, a row index
         self.last = None
+        self.data, self.loaded = None, 0  # load()'s result and when, reused between mouse moves
+        self.hot, self.hot_at = None, 0   # the pane under the mouse, and when it last moved
+        self.pressed = None               # the pane whose × was just clicked
+        self.asking = None                # (pane id, the confirm-before process) while it asks
 
     def load(self):
         """Windows in order, each a list of its panes (not counting the sidebars)."""
@@ -252,15 +260,29 @@ class Sidebar:
             return ""
         return age(int(now) - int(p["@claude_since"]))
 
-    def build(self, mywindow, windows, w, now=None):
+    def buttons(self, now):
+        """Which panes show a ×, and how: shown, pressed or asking."""
+        out = {}
+        if self.mode == "always":
+            out = dict.fromkeys(self.panes, "shown")
+        elif self.mode == "hover" and self.hot and now - self.hot_at < HOVER_IDLE:
+            out[self.hot] = "shown"
+        if self.pressed:
+            out[self.pressed] = "pressed"
+        if self.asking:
+            out[self.asking[0]] = "asking"
+        return out
+
+    def build(self, mywindow, windows, w, now=None, buttons=None):
         now = time.time() if now is None else now
+        buttons = buttons or {}
         rows = []
         session = None
         for panes in windows:
             first = panes[0]
             if first["session_name"] != session:
                 session = first["session_name"]
-                rows.append((fit("▾ " + session, w), "bold", None, False))
+                rows.append((fit("▾ " + session, w), "bold", None, False, None))
             mine = first["window_id"] == mywindow
             split = len(panes) > 1
             for i, p in enumerate(panes):
@@ -271,6 +293,9 @@ class Sidebar:
                     style = "current" if p["pane_active"] == "1" or not split else "bold"
                 else:
                     style = {"?": "waiting", "●": "unread"}.get(mark, "")
+                button = buttons.get(p["pane_id"])
+                if button == "asking":
+                    style = "dim"  # the question on the status line is about this row
                 # "  6 ● pane 1", then "  ⋮ ● pane 2" lined up under it; ⋮ runs down the window
                 dots = "⋮".ljust(len(first["window_index"]))
                 number = first["window_index"] if i == 0 else dots
@@ -279,37 +304,54 @@ class Sidebar:
                 room = w - len(BUTTON)
                 if when == " " or room - len(head) - len(when) < 10:  # the prompt keeps its room
                     when = ""
-                # the first line leaves room for the time and the close button at its end
-                end = len(when) + len(BUTTON)
+                # The first line leaves room for the time at its end, and for the × when it
+                # always shows. A hover × goes over the line's end instead, so the rows
+                # don't rewrap under the mouse.
+                end = len(when) + (len(BUTTON) if self.mode == "always" else 0)
                 lines = textwrap.wrap(name, w - len(indent), max_lines=2, placeholder="…",
                                       initial_indent=" " * end) or [""]
-                rows.append((fit(head + lines[0][end:], w - end) + when + BUTTON, style, p["pane_id"], True))
+                text = head + lines[0][end:]
+                if button:
+                    text = fit(text, w - len(when) - len(BUTTON)) + when + BUTTON
+                else:
+                    text = fit(text, w - len(when)) + when
+                rows.append((text, style, p["pane_id"], True, button))
                 for more in lines[1:]:
-                    rows.append((fit(indent + more, w), style, p["pane_id"], False))
+                    rows.append((fit(indent + more, w), style, p["pane_id"], False, None))
                 if about:
-                    rows.append((fit(indent + about, w), style if mine else "dim", p["pane_id"], False))
+                    rows.append((fit(indent + about, w), style if mine else "dim", p["pane_id"], False, None))
         return rows
 
-    def draw(self):
-        mywindow, windows = self.load()
+    def draw(self, reload=True):
+        """Redraw; reload=False (a mouse move) reuses what tmux said less than a second ago."""
+        now = time.time()
+        if reload or self.data is None or now - self.loaded >= 1:
+            self.data, self.loaded = self.load(), now
+            self.ages = opt("@sidebar_show_age", "1") == "1"
+            self.mode = opt("@sidebar_close_button", "hover")
+        mywindow, windows = self.data
         if not any(panes[0]["window_id"] == mywindow for panes in windows):
             sys.exit(0)  # everything else in this window has gone: let it close
         cols, height = os.get_terminal_size()
-        self.ages = opt("@sidebar_show_age", "1") == "1"
         self.panes = {p["pane_id"]: (p, len(panes) == 1) for panes in windows for p in panes}
         self.w = max(cols - 1, 12)  # the last column would wrap
-        self.rows = self.build(mywindow, windows, self.w)
+        self.rows = self.build(mywindow, windows, self.w, now, self.buttons(now))
         frame = (self.rows, self.cursor)
         if frame == self.last:
             return
         self.last = frame
         styles = {"bold": "\033[1m", "current": "\033[7;1m", "dim": "\033[2m",
                   "waiting": "\033[33;1m", "unread": "\033[32m", "": ""}
+        # the × on its own: brighter than the row (or the row's own look on the
+        # current row), white on red when pressed, and yellow while its question is up
+        looks = {"pressed": "\033[0m\033[1;37;41m", "asking": "\033[0m\033[33;7;1m"}
         out = []
-        for i, (text, style, _, first) in enumerate(self.rows[: height - 1]):
+        for i, (text, style, _, _, button) in enumerate(self.rows[: height - 1]):
             sel = "\033[4m" if i == self.cursor else ""
-            if first and style != "current":  # the ×, dimmed except on the current row
-                text = text[:-1] + "\033[0m\033[2m" + text[-1]
+            if button in looks:
+                text = text[:-2] + looks[button] + text[-2:]
+            elif button and style != "current":
+                text = text[:-1] + "\033[0m\033[1m" + text[-1]
             out.append(styles[style] + sel + text + "\033[0m")
         out.append("\033[J")
         sys.stdout.write("\033[H" + "\r\n".join(out))
@@ -331,28 +373,53 @@ class Sidebar:
 
     def close(self, row):
         """Close the row's pane, asking first unless it's a shell at its prompt
-        (closing a Claude pane ends its session)."""
+        (closing a Claude pane ends its session). The × shows pressed first."""
         if not 0 <= row < len(self.rows) or not self.rows[row][3] or self.rows[row][2] not in self.panes:
             return
         p, alone = self.panes[self.rows[row][2]]
+        self.pressed = p["pane_id"]
+        self.draw(reload=False)
+        time.sleep(PRESS)
+        self.pressed = None
         self.unfocus()
-        kill = "kill-pane -t " + p["pane_id"]
+        # the window's last pane takes the window, sidebar and all, at once
+        kill = "kill-window -t " + p["window_id"] if alone else "kill-pane -t " + p["pane_id"]
         if p["pane_current_command"].lstrip("-") in SHELLS:
             tmux(*kill.split())
         else:
             name = self.label(p, alone)[0].replace("#", "##")  # the prompt is a tmux format
-            tmux("confirm-before", "-b", "-p", "close %s.%s (%s)? (y/n)" % (p["window_index"], p["pane_index"], name), kill)
-        self.last = None
+            # Without -b it runs until the question is answered or dismissed, which
+            # is when the row's mark clears (see run)
+            ask = subprocess.Popen(["tmux", "confirm-before", "-p", "close %s.%s (%s)? (y/n)"
+                                    % (p["window_index"], p["pane_index"], name), kill],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.asking = (p["pane_id"], ask)
+
+    def hover(self, x, row):
+        """The mouse moved to column x of row: show the × of the pane under it.
+        At the left edge it's on its way out, which the sidebar can't see."""
+        pane = self.rows[row][2] if 0 <= row < len(self.rows) and x > 2 else None
+        self.hot, self.hot_at = pane, time.time()
+
+    def click(self, x, row):
+        if x < self.w or self.mode == "off" or not 0 <= row < len(self.rows) or not self.rows[row][3]:
+            self.go(row)
+        elif self.rows[row][4]:  # the ×, in the last drawn column or the spare one after it
+            self.close(row)
+        else:  # no × shown, as on a touchscreen: show it, and the next tap closes
+            self.hot, self.hot_at = self.rows[row][2], time.time()
 
     def key(self, data):
-        for m in re.finditer(rb"\033\[<(\d+);(\d+);(\d+)([Mm])", data):
-            button, x, y, kind = int(m[1]), int(m[2]), int(m[3]), m[4]
-            if button == 0 and kind == b"M":
-                if x >= self.w and 0 <= y - 1 < len(self.rows) and self.rows[y - 1][3]:
-                    self.close(y - 1)  # the × in the last drawn column, or the spare one after it
-                else:
-                    self.go(y - 1)
-            return
+        """Handle input; False when it was only mouse moves, which need no reload."""
+        events = re.findall(rb"\033\[<(\d+);(\d+);(\d+)([Mm])", data)
+        for button, x, y, kind in events:
+            button, x, row = int(button), int(x), int(y) - 1
+            if button & 32 and button & 3 == 3:  # a move with no button held
+                self.hover(x, row)
+            elif button == 0 and kind == b"M":
+                self.click(x, row)
+        if events:
+            return not all(int(e[0]) & 32 for e in events)
         targets = [i for i, r in enumerate(self.rows) if r[3]]
         if not targets:
             return
@@ -377,18 +444,24 @@ class Sidebar:
         saved = termios.tcgetattr(fd)
         signal.signal(signal.SIGWINCH, lambda *_: setattr(self, "last", None))
         tty.setcbreak(fd)
-        sys.stdout.write("\033[?25l\033[?1000h\033[?1006h\033[2J")
+        # 1003: every mouse move too, for the hover × (tmux asks the terminal for
+        # moves only while a pane wants them)
+        sys.stdout.write("\033[?25l\033[?1000h\033[?1003h\033[?1006h\033[2J")
+        reload = True
         try:
             while True:
-                self.draw()
+                if self.asking and self.asking[1].poll() is not None:
+                    self.asking = None  # answered or dismissed
+                self.draw(reload)
                 try:
-                    ready, _, _ = select.select([fd], [], [], 1)
+                    ready, _, _ = select.select([fd], [], [], 0.2 if self.asking else 1)
                 except InterruptedError:
                     continue
+                reload = True
                 if ready:
-                    self.key(os.read(fd, 1024))
+                    reload = self.key(os.read(fd, 1024)) is not False
         finally:
-            sys.stdout.write("\033[?1000l\033[?1006l\033[?25h")
+            sys.stdout.write("\033[?1000l\033[?1003l\033[?1006l\033[?25h")
             termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
 
