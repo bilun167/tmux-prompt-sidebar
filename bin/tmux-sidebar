@@ -42,7 +42,7 @@ import unicodedata
 
 SEP = "|~|"  # tmux escapes control characters in -F output
 SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh"}
-BUTTON = " ×"  # ends a pane's first row while hovered; a click on it closes the pane
+BUTTON = " × "  # ends a pane's first row while hovered, × centred; a click on it closes the pane
 PRESS = 0.15   # seconds the × shows pressed before the question
 HOVER_IDLE = 10  # the mouse can't be seen leaving, so a still × hides after this
 FIELDS = [
@@ -349,9 +349,9 @@ class Sidebar:
         for i, (text, style, _, _, button) in enumerate(self.rows[: height - 1]):
             sel = "\033[4m" if i == self.cursor else ""
             if button in looks:
-                text = text[:-2] + looks[button] + text[-2:]
+                text = text[:-3] + looks[button] + text[-3:]
             elif button and style != "current":
-                text = text[:-1] + "\033[0m\033[1m" + text[-1]
+                text = text[:-2] + "\033[0m\033[1m" + text[-2:]
             out.append(styles[style] + sel + text + "\033[0m")
         out.append("\033[J")
         sys.stdout.write("\033[H" + "\r\n".join(out))
@@ -402,9 +402,9 @@ class Sidebar:
         self.hot, self.hot_at = pane, time.time()
 
     def click(self, x, row):
-        if x < self.w or self.mode == "off" or not 0 <= row < len(self.rows) or not self.rows[row][3]:
+        if x <= self.w - len(BUTTON) or self.mode == "off" or not 0 <= row < len(self.rows) or not self.rows[row][3]:
             self.go(row)
-        elif self.rows[row][4]:  # the ×, in the last drawn column or the spare one after it
+        elif self.rows[row][4]:  # the × and the space on each side of it, or the spare column after
             self.close(row)
         else:  # no × shown, as on a touchscreen: show it, and the next tap closes
             self.hot, self.hot_at = self.rows[row][2], time.time()
