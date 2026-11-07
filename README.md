@@ -24,6 +24,9 @@ The sidebar answers all three at a glance:
   finished (`40s`, `12m`, `3h`), so the question that's been sitting for half
   an hour stands out.
 - **One click to get there**, across windows and sessions. Or `j`/`k` and Enter.
+- **Close from the list:** the `×` at the end of a pane's row closes that pane
+  (and its window, if it was the last one). It asks first, since closing a
+  Claude pane ends its session; a shell idle at its prompt closes at once.
 - **Straight to whoever needs you:** `prefix + N` goes to the pane that has been
   waiting longest, then to finished ones you haven't seen; press it again for
   the next. `n` in the sidebar does the same.

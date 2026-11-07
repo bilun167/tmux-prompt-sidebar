@@ -17,7 +17,9 @@ dimmed, Claude's own title for the conversation; once Claude exits back to the
 shell, the pane's folder instead. A window split into panes
 has a row per pane under its number. Marks:
   ⋯ working   ? waiting for you   ● finished since you last looked
-Click a row, or j/k and Enter, to go to that window and pane; n for "next". The sidebar is
+Click a row, or j/k and Enter, to go to that window and pane; n for "next". The
+× at the end of a pane's row closes that pane, after a y/n unless it's a shell
+at its prompt. The sidebar is
 @sidebar_width_pct of the client's width (default 20), kept between
 @sidebar_min and @sidebar_max columns (22 and 40), and draws to whatever width
 its pane has, so a drag of its border stays until the terminal is resized. On a
@@ -39,9 +41,10 @@ import unicodedata
 
 SEP = "|~|"  # tmux escapes control characters in -F output
 SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh"}
+BUTTON = " ×"  # ends each pane's first row; a click on it closes the pane
 FIELDS = [
     "session_name", "window_index", "window_id", "window_name", "window_active",
-    "session_attached", "pane_id", "pane_active", "pane_title",
+    "session_attached", "pane_id", "pane_index", "pane_active", "pane_title",
     "pane_current_command", "pane_current_path", "@claude_prompt", "@claude_state", "@claude_unread", "@claude_since", "@sidebar",
 ]
 
@@ -209,6 +212,8 @@ class Sidebar:
         tmux("select-pane", "-t", self.me, "-T", "windows")  # for pane-border-status
         self.host = os.uname().nodename
         self.rows = []      # (text, style, pane id or None, first row of a pane?)
+        self.panes = {}     # pane id -> (pane, alone in its window?), for close
+        self.w = 0          # the width rows are drawn at
         self.cursor = None  # keyboard selection, a row index
         self.last = None
 
@@ -271,12 +276,14 @@ class Sidebar:
                 number = first["window_index"] if i == 0 else dots
                 head, indent = "  %s %s " % (number, mark), "  %s   " % dots
                 when = " " + self.since(p, now)
-                if when == " " or w - len(head) - len(when) < 10:  # the prompt keeps its room
+                room = w - len(BUTTON)
+                if when == " " or room - len(head) - len(when) < 10:  # the prompt keeps its room
                     when = ""
-                # the first line leaves room for the time at its end
+                # the first line leaves room for the time and the close button at its end
+                end = len(when) + len(BUTTON)
                 lines = textwrap.wrap(name, w - len(indent), max_lines=2, placeholder="…",
-                                      initial_indent=" " * len(when)) or [""]
-                rows.append((fit(head + lines[0][len(when):], w - len(when)) + when, style, p["pane_id"], True))
+                                      initial_indent=" " * end) or [""]
+                rows.append((fit(head + lines[0][end:], w - end) + when + BUTTON, style, p["pane_id"], True))
                 for more in lines[1:]:
                     rows.append((fit(indent + more, w), style, p["pane_id"], False))
                 if about:
@@ -289,7 +296,9 @@ class Sidebar:
             sys.exit(0)  # everything else in this window has gone: let it close
         cols, height = os.get_terminal_size()
         self.ages = opt("@sidebar_show_age", "1") == "1"
-        self.rows = self.build(mywindow, windows, max(cols - 1, 12))  # the last column would wrap
+        self.panes = {p["pane_id"]: (p, len(panes) == 1) for panes in windows for p in panes}
+        self.w = max(cols - 1, 12)  # the last column would wrap
+        self.rows = self.build(mywindow, windows, self.w)
         frame = (self.rows, self.cursor)
         if frame == self.last:
             return
@@ -297,8 +306,10 @@ class Sidebar:
         styles = {"bold": "\033[1m", "current": "\033[7;1m", "dim": "\033[2m",
                   "waiting": "\033[33;1m", "unread": "\033[32m", "": ""}
         out = []
-        for i, (text, style, _, _) in enumerate(self.rows[: height - 1]):
+        for i, (text, style, _, first) in enumerate(self.rows[: height - 1]):
             sel = "\033[4m" if i == self.cursor else ""
+            if first and style != "current":  # the ×, dimmed except on the current row
+                text = text[:-1] + "\033[0m\033[2m" + text[-1]
             out.append(styles[style] + sel + text + "\033[0m")
         out.append("\033[J")
         sys.stdout.write("\033[H" + "\r\n".join(out))
@@ -318,11 +329,29 @@ class Sidebar:
         tmux("select-pane", "-t", pane)
         self.cursor = None
 
+    def close(self, row):
+        """Close the row's pane, asking first unless it's a shell at its prompt
+        (closing a Claude pane ends its session)."""
+        if not 0 <= row < len(self.rows) or not self.rows[row][3] or self.rows[row][2] not in self.panes:
+            return
+        p, alone = self.panes[self.rows[row][2]]
+        self.unfocus()
+        kill = "kill-pane -t " + p["pane_id"]
+        if p["pane_current_command"].lstrip("-") in SHELLS:
+            tmux(*kill.split())
+        else:
+            name = self.label(p, alone)[0].replace("#", "##")  # the prompt is a tmux format
+            tmux("confirm-before", "-b", "-p", "close %s.%s (%s)? (y/n)" % (p["window_index"], p["pane_index"], name), kill)
+        self.last = None
+
     def key(self, data):
         for m in re.finditer(rb"\033\[<(\d+);(\d+);(\d+)([Mm])", data):
-            button, y, kind = int(m[1]), int(m[3]), m[4]
+            button, x, y, kind = int(m[1]), int(m[2]), int(m[3]), m[4]
             if button == 0 and kind == b"M":
-                self.go(y - 1)
+                if x >= self.w and 0 <= y - 1 < len(self.rows) and self.rows[y - 1][3]:
+                    self.close(y - 1)  # the × in the last drawn column, or the spare one after it
+                else:
+                    self.go(y - 1)
             return
         targets = [i for i, r in enumerate(self.rows) if r[3]]
         if not targets:
