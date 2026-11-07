@@ -77,19 +77,19 @@ class Age(unittest.TestCase):
         p = pane(**{"@claude_prompt": "fix the flaky login test in CI", "@claude_state": "waiting",
                     "@claude_since": "1000"})
         rows = bar().build("@9", [[p]], 30, now=1000 + 720)
-        self.assertEqual([r[0] for r in rows], ["▾ main".ljust(30), "  1 ? fix the flaky login  12m",
-                                                "  ⋮   test in CI".ljust(30)])
+        self.assertEqual([r[0] for r in rows], ["▾ main".ljust(30), "  1 ? fix the flaky      12m ×",
+                                                "  ⋮   login test in CI".ljust(30)])
 
     def test_dropped_when_narrow_unknown_or_off(self):
         p = pane(**{"@claude_prompt": "fix it", "@claude_state": "done", "@claude_since": "1000"})
         self.assertNotIn("1h", bar().build("@9", [[p]], 18, now=5000)[1][0])
         self.assertIn("1h", bar().build("@9", [[p]], 22, now=5000)[1][0])
         p["@claude_since"] = ""
-        self.assertEqual(bar().build("@9", [[p]], 22, now=5000)[1][0].rstrip(), "  1 · fix it")
+        self.assertEqual(bar().build("@9", [[p]], 22, now=5000)[1][0], "  1 · fix it".ljust(20) + " ×")
         p["@claude_since"] = "1000"
         b = bar()
         b.ages = False
-        self.assertEqual(b.build("@9", [[p]], 22, now=5000)[1][0].rstrip(), "  1 · fix it")
+        self.assertEqual(b.build("@9", [[p]], 22, now=5000)[1][0], "  1 · fix it".ljust(20) + " ×")
 
     def test_not_for_a_shell_or_a_spinner_the_hook_did_not_report(self):
         shell = pane(pane_current_command="zsh", **{"@claude_state": "done", "@claude_since": "1000"})
@@ -137,9 +137,55 @@ class Build(unittest.TestCase):
         b = pane(pane_id="%2", **{"@claude_prompt": "second"})
         other = pane(window_index="2", window_id="@2", pane_id="%3", **{"@claude_unread": "1"})
         rows = bar().build("@1", [[a, b], [other]], 30)
-        self.assertEqual([r[0].rstrip() for r in rows], ["▾ main", "  1 · first", "  ⋮ · second", "  2 ● zsh"])
+        self.assertEqual([r[0].rstrip(" ×") for r in rows], ["▾ main", "  1 · first", "  ⋮ · second", "  2 ● zsh"])
         self.assertEqual([r[1] for r in rows], ["bold", "current", "bold", "unread"])
         self.assertTrue(all(len(r[0]) == 30 for r in rows))
+
+
+class Close(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        self.tmux, sidebar.tmux = sidebar.tmux, lambda *a: self.calls.append(a) or ""
+        self.addCleanup(setattr, sidebar, "tmux", self.tmux)
+
+    def sidebar_with(self, *panes, w=30):
+        b = bar()
+        b.me, b.cursor, b.last, b.ages = "%0", None, None, True
+        b.panes = {p["pane_id"]: (p, len(panes) == 1) for p in panes}
+        b.w = w
+        b.rows = b.build("@9", [list(panes)], w)
+        return b
+
+    def click(self, b, x, y):
+        b.key(b"\033[<0;%d;%dM" % (x, y))
+
+    def test_only_on_each_panes_first_row(self):
+        p = pane(**{"@claude_prompt": "fix the flaky login test in CI", "pane_title": "✳ Login test"})
+        rows = bar().build("@9", [[p]], 30)
+        self.assertEqual([r[0].endswith(" ×") for r in rows], [False, True, False, False])
+        self.assertEqual(rows[1][0], "  1 · fix the flaky login    ×")
+        self.assertTrue(all(sidebar.width(r[0]) == 30 for r in rows))
+
+    def test_click_on_the_button_asks_before_closing_claude(self):
+        p = pane(pane_id="%5", window_index="3", pane_index="1", **{"@claude_prompt": "fix #12"})
+        b = self.sidebar_with(p)
+        self.click(b, 30, 2)
+        self.assertIn(("confirm-before", "-b", "-p", "close 3.1 (fix ##12)? (y/n)", "kill-pane -t %5"), self.calls)
+        self.assertFalse([c for c in self.calls if c[0] == "kill-pane"])
+
+    def test_a_shell_at_its_prompt_closes_at_once(self):
+        b = self.sidebar_with(pane(pane_id="%5", pane_current_command="-zsh"))
+        self.click(b, 31, 2)  # the spare last column counts too
+        self.assertIn(("kill-pane", "-t", "%5"), self.calls)
+        self.assertFalse([c for c in self.calls if c[0] == "confirm-before"])
+
+    def test_elsewhere_on_the_row_switches(self):
+        p = pane(pane_id="%5", **{"@claude_prompt": "fix the flaky login test in CI"})
+        b = self.sidebar_with(p)
+        self.click(b, 29, 2)  # just left of the ×
+        self.click(b, 30, 3)  # the ×'s column on the wrapped line, which has none
+        self.assertEqual([c for c in self.calls if c[0] == "select-pane"], [("select-pane", "-t", "%5")] * 2)
+        self.assertFalse([c for c in self.calls if c[0] in ("kill-pane", "confirm-before")])
 
 
 if __name__ == "__main__":
