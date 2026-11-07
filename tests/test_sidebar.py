@@ -178,11 +178,11 @@ class Close(unittest.TestCase):
         self.assertFalse(any("×" in r[0] for r in b.rows))
         self.assertEqual(b.rows[1][0], "  1 · fix the flaky login test")  # the full width
         self.assertIs(self.mouse(b, 35, 10, 3), False)  # onto the wrapped line: no reload
-        self.assertEqual([r[0][-2:] == " ×" for r in b.rows], [False, True, False, False])
-        self.assertEqual(b.rows[1][0], "  1 · fix the flaky login t… ×")
+        self.assertEqual([r[0][-3:] == " × " for r in b.rows], [False, True, False, False])
+        self.assertEqual(b.rows[1][0], "  1 · fix the flaky login … × ")
         self.assertEqual(len(b.rows), 4)  # nothing rewraps under the mouse
         self.mouse(b, 35, 10, 4)
-        self.assertEqual([r[0][-2:] == " ×" for r in b.rows], [False, False, False, True])
+        self.assertEqual([r[0][-3:] == " × " for r in b.rows], [False, False, False, True])
 
     def test_hides_at_the_left_edge_off_a_pane_or_when_still(self):
         b = self.sidebar_with(pane(pane_id="%1"))
@@ -197,7 +197,7 @@ class Close(unittest.TestCase):
     def test_always_and_off(self):
         a, c = pane(pane_id="%1"), pane(pane_id="%2", window_index="2")
         b = self.sidebar_with(a, c, mode="always")
-        self.assertEqual([r[0][-2:] == " ×" for r in b.rows], [False, True, True])
+        self.assertEqual([r[0][-3:] == " × " for r in b.rows], [False, True, True])
         b = self.sidebar_with(a, c, mode="off")
         self.mouse(b, 35, 10, 2)
         self.assertFalse(any("×" in r[0] for r in b.rows))
@@ -209,7 +209,7 @@ class Close(unittest.TestCase):
         p = pane(pane_id="%5", window_index="3", pane_index="1", **{"@claude_prompt": "fix #12"})
         b = self.sidebar_with(p)
         self.mouse(b, 35, 10, 2)
-        self.assertIs(self.mouse(b, 0, 30, 2), True)
+        self.assertIs(self.mouse(b, 0, 28, 2), True)  # the button's left edge
         self.assertEqual(self.drawn, ["%5"])  # drawn pressed once, before the question
         self.assertEqual(self.asked, [["tmux", "confirm-before", "-p", "close 3.1 (fix ##12)? (y/n)", "kill-window -t @1"]])
         self.assertEqual(b.asking, ("%5", "process"))
@@ -242,8 +242,8 @@ class Close(unittest.TestCase):
     def test_elsewhere_on_the_row_switches(self):
         b = self.sidebar_with(pane(pane_id="%5", **{"@claude_prompt": self.long}))
         self.mouse(b, 35, 10, 2)
-        self.mouse(b, 0, 29, 2)  # just left of the ×
-        self.mouse(b, 0, 30, 3)  # the ×'s column on the wrapped line, which has none
+        self.mouse(b, 0, 27, 2)  # just left of the button
+        self.mouse(b, 0, 29, 3)  # the ×'s column on the wrapped line, which has none
         self.assertEqual([c for c in self.calls if c[0] == "select-pane"], [("select-pane", "-t", "%5")] * 2)
         self.assertFalse(self.asked)
 
