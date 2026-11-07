@@ -24,9 +24,11 @@ The sidebar answers all three at a glance:
   finished (`40s`, `12m`, `3h`), so the question that's been sitting for half
   an hour stands out.
 - **One click to get there**, across windows and sessions. Or `j`/`k` and Enter.
-- **Close from the list:** the `×` at the end of a pane's row closes that pane
-  (and its window, if it was the last one). It asks first, since closing a
-  Claude pane ends its session; a shell idle at its prompt closes at once.
+- **Close from the list:** move the mouse onto a row and a `×` appears at its
+  end. A click shows it pressed, then closes that pane (and its window, if it
+  was the last one). It asks first, since closing a Claude pane ends its
+  session, and the row stays marked while it asks; a shell idle at its prompt
+  closes at once. On a touchscreen, tap the row's right end to show the `×`.
 - **Straight to whoever needs you:** `prefix + N` goes to the pane that has been
   waiting longest, then to finished ones you haven't seen; press it again for
   the next. `n` in the sidebar does the same.
@@ -80,6 +82,7 @@ Set these in `~/.tmux.conf` before the plugin loads:
 | `@sidebar_min`, `@sidebar_max` | `22`, `40` | limits on that width, in columns |
 | `@sidebar_on` | `1` | `0` starts with the sidebar off |
 | `@sidebar_show_age` | `1` | `0` hides how long each pane has been in its state |
+| `@sidebar_close_button` | `hover` | `always` shows every row's `×`; `off` has none |
 
 The sidebar follows the terminal when it's resized. Drag its border to change
 its width; that stays until the terminal is resized again.
@@ -94,6 +97,11 @@ its width; that stays until the terminal is resized again.
   you add the sidebar to resurrect's processes:
   `set -g @resurrect-processes '"~tmux-sidebar run"'` (alongside any you
   already list).
+
+- **The hover `×`** needs your terminal to report mouse moves, which tmux asks
+  it for while a sidebar is open (most terminals do). tmux doesn't tell a pane
+  when the mouse leaves it, so the `×` hides when the mouse reaches the
+  sidebar's left edge, or after 10 seconds without moving.
 
 ## How it works
 
